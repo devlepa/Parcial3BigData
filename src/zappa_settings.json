@@ -1,0 +1,27 @@
+{
+    "dev": {
+        "s3_bucket": "your-zappa-deployment-bucket", // Zappa's internal bucket
+        "app_function": "download_headlines.download_and_upload_to_s3", // Keep the original for now
+        "aws_region": "us-east-1",
+        "memory_size": 256,
+        "timeout_seconds": 300,
+        "events": [
+            {
+                "function": "download_headlines.download_and_upload_to_s3",
+                "schedule": "cron(0 6 * * ? *)"
+            },
+            {
+                "function": "process_headlines.process_s3_html_event", // New function
+                "bucket": "your-unique-bucket-name-here", // The actual data bucket
+                "event": "s3:ObjectCreated:*",
+                "prefix": "headlines/raw/", // Only trigger for objects in this prefix
+                "suffix": ".html"          // Only trigger for HTML files
+            }
+        ],
+        "environment_variables": {
+            "S3_BUCKET": "your-unique-bucket-name-here", // Pass the data bucket name
+            "GLUE_CRAWLER_NAME": "headlines_csv_crawler"    // Name of the Glue Crawler
+        },
+        "manage_roles": true
+    }
+}
