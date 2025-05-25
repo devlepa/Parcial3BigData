@@ -1,21 +1,18 @@
-# .github/workflows/deploy-glue-jobs.yml
 name: Deploy Glue Job Scripts to S3
 
 on:
   push:
     branches:
-      - main # O 'develop'
+      - main
     paths:
-      - 'src/glue_jobs/**' # Se dispara si los scripts de Glue Jobs cambian
-      - 'src/glue_jobs/bootstrap/**' # Si tienes scripts de bootstrap separados
-      - 'src/glue_jobs/libs/**' # Si tienes bibliotecas zip separadas
+      - 'src/glue_jobs/**'
+      - '.github/workflows/deploy-glue-jobs.yml'
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      AWS_REGION: us-east-1
-      S3_GLUE_SCRIPTS_BUCKET: [TU_NOMBRE_DE_USUARIO]-glue-scripts # El bucket S3 para tus scripts de Glue
+      AWS_REGION: ${{ secrets.AWS_REGION }}
 
     steps:
     - name: Checkout code
@@ -24,24 +21,32 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.9' # Solo para asegurar que AWS CLI funciona si no hay Conda
+        python-version: '3.9'
 
     - name: Configure AWS Credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: <span class="math-inline">\{\{ env\.AWS\_REGION \}\}
-\- name\: Run Unit Tests \(Glue Job Scripts\)
-\# Nota\: Para probar Glue Jobs PySpark, a menudo se necesita un entorno Spark local o mocks más complejos\.
-\# Aquí, solo se ejecutan los tests unitarios estándar para Python Shell\.
-run\: \|
-pip install pytest moto \# Instala las dependencias de testing
-pytest tests/unit/glue\_jobs/
-\- name\: Sync Glue Job Scripts to S3
-run\: \|
-aws s3 sync src/glue\_jobs/ s3\://</span>{{ env.S3_GLUE_SCRIPTS_BUCKET }}/scripts/ --delete
-        # Si tienes un script de bootstrap separado para EMR/Glue, sincronízalo
-        # aws s3 cp src/glue_jobs/bootstrap/install_pyspark_deps.sh s3://<span class="math-inline">\{\{ env\.S3\_GLUE\_SCRIPTS\_BUCKET \}\}/bootstrap/install\_pyspark\_deps\.sh
-\# Si tienes un archivo zip de bibliotecas para Glue/EMR, sincronízalo
-\# aws s3 cp src/glue\_jobs/libs/dependencies\.zip s3\://</span>{{ env.S3_GLUE_SCRIPTS_BUCKET }}/libs/dependencies.zip
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Install dependencies for testing
+      run: |
+        pip install pytest moto # Instala las dependencias necesarias para los tests unitarios de Glue
+      working-directory: ${{ github.workspace }}
+
+    - name: Run Unit Tests (Glue Job Scripts)
+      run: |
+        pytest tests/unit/glue_jobs/ # Asegúrate de que esta ruta sea correcta y los tests existan
+      working-directory: ${{ github.workspace }}
+
+    - name: Sync Glue Job Scripts to S3
+      run: |
+        # Sincroniza la carpeta src/glue_jobs/ al subdirectorio 'scripts' en S3
+        aws s3 sync src/glue_jobs/ s3://${{ secrets.S3_GLUE_SCRIPTS_BUCKET }}/scripts/ --delete
+
+        # Si tienes un script de bootstrap, cárgalo aquí (descomenta si aplica)
+        # aws s3 cp src/glue_jobs/bootstrap/install_pyspark_deps.sh s3://${{ secrets.S3_GLUE_SCRIPTS_BUCKET }}/bootstrap/install_pyspark_deps.sh
+
+        # Si tienes un archivo zip de bibliotecas para Glue/EMR, cárgalo aquí (descomenta si aplica)
+        # aws s3 cp src/glue_jobs/libs/dependencies.zip s3://${{ secrets.S3_GLUE_SCRIPTS_BUCKET }}/libs/dependencies.zip

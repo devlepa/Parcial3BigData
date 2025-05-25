@@ -6,116 +6,95 @@ from pyspark.ml import Pipeline
 from pyspark.ml.evaluation import MulticlassClassificationEvaluator
 import sys
 import os
+from dotenv import load_dotenv
+from awsglue.utils import getResolvedOptions # Para obtener argumentos de EMR/Spark Submit
 
-# --- Inicializar Spark Session ---
-# Esta SparkSession será creada cuando el script se ejecute via spark-submit en EMR
-spark = SparkSession.builder.appName("NewsHeadlinesMLPipeline") \
-    .getOrCreate()
+# Carga variables de entorno del archivo .env si existe (solo para desarrollo local)
+load_dotenv()
 
-# --- Configuración (se recomienda usar variables de entorno o argumentos para EMR) ---
-# En un cluster EMR, puedes pasar estos como --conf spark.driver.extraJavaOptions=-DYOUR_VAR=value
-# O, en el caso de spark-submit, puedes pasarlos como argumentos del script (sys.argv)
-# Para este ejemplo, los definimos aquí asumiendo que EMR tiene acceso a S3_BUCKET_NAME
-# O los obtendrás del entorno de EMR.
-S3_BUCKET_NAME = os.environ.get('S3_BUCKET', 'your-unique-bucket-name-here') # Reemplaza con tu bucket real
+# Inicializar SparkSession
+# En EMR, SparkSession ya viene preconfigurada por el JobFlow.
+spark = SparkSession.builder.appName("NewsMLPipeline").getOrCreate()
+
+# Try to get S3_DATA_BUCKET from command-line arguments (passed by EMR orchestrator)
+# Fallback to environment variables if not found (for local testing or other env setup)
+try:
+    # EMR Orchestrator pasa --s3_data_bucket, así se lee
+    args = getResolvedOptions(sys.argv, ['JOB_NAME', 's3_data_bucket'])
+    S3_BUCKET_NAME = args['s3_data_bucket']
+except Exception as e:
+    print(f"Advertencia: No se pudo obtener s3_data_bucket de los argumentos. Intentando leer de variables de entorno. Error: {e}")
+    # Esto se usará para pruebas locales o si EMR inyecta la variable de otra forma
+    S3_BUCKET_NAME = os.environ.get('S3_DATA_BUCKET')
+
+if not S3_BUCKET_NAME:
+    raise ValueError("S3_DATA_BUCKET no está configurado. Por favor, proporiónalo como argumento de Spark-Submit o en las variables de entorno.")
+
 S3_INPUT_PATH = f"s3://{S3_BUCKET_NAME}/headlines/final/"
 S3_OUTPUT_PATH = f"s3://{S3_BUCKET_NAME}/ml_results/news_classification/"
 
-print(f"Ejecutando Pipeline ML de PySpark. Entrada: {S3_INPUT_PATH}, Salida: {S3_OUTPUT_PATH}")
+print(f"Leyendo datos de: {S3_INPUT_PATH}")
+print(f"Escribiendo resultados en: {S3_OUTPUT_PATH}")
 
-# --- 1. Cargar Datos desde S3 ---
-print("Cargando datos desde S3...")
-# Se asume que los CSV tienen cabecera y el esquema puede inferirse.
-# Si quieres usar el catálogo de Glue (recomendado), usa:
-# df = spark.read.table("news_headlines_db.headlines_final")
-df = spark.read.csv(S3_INPUT_PATH, header=True, inferSchema=True)
-df.show(5, truncate=False)
-df.printSchema()
+# Cargar datos
+try:
+    df = spark.read.csv(S3_INPUT_PATH, header=True, sep=';', inferSchema=True)
+    print("Esquema de los datos cargados:")
+    df.printSchema()
+    df.show(5, truncate=False)
+except Exception as e:
+    print(f"Error al cargar datos desde {S3_INPUT_PATH}: {e}")
+    # En un entorno de producción, aquí podrías querer enviar una notificación.
+    spark.stop()
+    sys.exit(1) # Salir con un código de error
 
-# --- 2. Preparación de Datos e Ingeniería de Características ---
+# Preprocesamiento de texto
+tokenizer = Tokenizer(inputCol="titular", outputCol="words")
+stopwords_remover = StopWordsRemover(inputCol=tokenizer.getOutputCol(), outputCol="filtered_words")
+hashing_tf = HashingTF(inputCol=stopwords_remover.getOutputCol(), outputCol="raw_features")
+idf = IDF(inputCol=hashing_tf.getOutputCol(), outputCol="features")
 
-# Crear una columna 'label' sintética para la clasificación (ejemplo).
-# En un proyecto real, necesitarías un dataset previamente etiquetado para el entrenamiento supervisado.
-# Asignando etiquetas numéricas arbitrarias a las categorías para clasificación multiclase
-df = df.withColumn("label",
-    when(col("category").isin(["General", "Noticias"]), lit(0))
-    .when(col("category") == "Deportes", lit(1))
-    .when(col("category") == "Politica", lit(2))
-    .when(col("category") == "Economia", lit(3))
-    .when(col("category") == "Cultura", lit(4))
-    .when(col("category") == "Internacional", lit(5))
-    .when(col("category") == "Opinion", lit(6))
-    .otherwise(lit(7)) # Etiqueta por defecto para categorías desconocidas
-)
+# Preparar datos para el modelo (usaremos una columna numérica para la categoría)
+# Crear un mapeo simple de categorías a números
+# Si tienes muchas categorías, podrías usar StringIndexer y OneHotEncoder
+df_prep = df.withColumn("label", when(col("categoria") == "colombia", 0.0)
+                               .when(col("categoria") == "mundo", 1.0)
+                               .otherwise(2.0)) # Ejemplo: 0 para Colombia, 1 para Mundo, 2 para Otros
 
-# Combinar columnas de texto relevantes en una única columna 'text'
-df = df.withColumn("text", col("headline"))
-df.show(5, truncate=False)
+# Dividir datos en conjuntos de entrenamiento y prueba
+(trainingData, testData) = df_prep.randomSplit([0.7, 0.3], seed=42)
 
-# --- 3. Etapas del Pipeline PySpark ML ---
+# Modelo de clasificación (Regresión Logística como ejemplo simple)
+lr = LogisticRegression(featuresCol="features", labelCol="label", maxIter=10)
 
-# Etapa 1: Tokenización (dividir texto en palabras)
-tokenizer = Tokenizer(inputCol="text", outputCol="words")
+# Crear un pipeline
+pipeline = Pipeline(stages=[tokenizer, stopwords_remover, hashing_tf, idf, lr])
 
-# Etapa 2: Eliminar Stop Words (palabras comunes como "un", "la", "es")
-# Para palabras en español, puedes cargar un diccionario de stop words específico.
-# Ej: StopWordsRemover.loadDefaultStopWords("spanish") si tienes los datos de NLTK
-remover = StopWordsRemover(inputCol=tokenizer.getOutputCol(), outputCol="filtered_words")
-
-# Etapa 3: TF (Term Frequency) - Conteo de palabras
-hashingTF = HashingTF(inputCol=remover.getOutputCol(), outputCol="rawFeatures", numFeatures=20000)
-
-# Etapa 4: IDF (Inverse Document Frequency) - Ponderación de palabras por rareza
-idf = IDF(inputCol=hashingTF.getOutputCol(), outputCol="features") # 'features' es nuestro vector final
-
-# Etapa 5: Modelo de Clasificación
-# Regresión Logística como ejemplo. Otras opciones: NaiveBayes, RandomForestClassifier, GBTClassifier
-# Asegúrate de que la columna 'label' exista y sea numérica.
-classifier = LogisticRegression(featuresCol="features", labelCol="label", maxIter=10)
-
-# --- 4. Construir el Pipeline ML ---
-pipeline = Pipeline(stages=[tokenizer, remover, hashingTF, idf, classifier])
-
-# --- 5. Dividir Datos en Entrenamiento y Prueba ---
-(trainingData, testData) = df.randomSplit([0.8, 0.2], seed=1234)
-
-# --- 6. Entrenar el Modelo ---
-print("Entrenando el pipeline ML...")
+# Entrenar el modelo
+print("Entrenando el modelo ML...")
 model = pipeline.fit(trainingData)
-print("Entrenamiento del modelo completado.")
+print("Modelo ML entrenado.")
 
-# --- 7. Realizar Predicciones en Datos de Prueba ---
-print("Realizando predicciones en datos de prueba...")
+# Realizar predicciones en los datos de prueba
 predictions = model.transform(testData)
-predictions.select("headline", "category", "label", "prediction", "probability").show(10, truncate=False)
+print("Predicciones realizadas:")
+predictions.select("titular", "categoria", "label", "prediction").show(5, truncate=False)
 
-# --- 8. Evaluar el Modelo ---
-print("Evaluando el modelo...")
+# Evaluar el modelo
 evaluator = MulticlassClassificationEvaluator(labelCol="label", predictionCol="prediction", metricName="accuracy")
 accuracy = evaluator.evaluate(predictions)
-print(f"Precisión (Accuracy) en Test = {accuracy}")
+print(f"Precisión del modelo: {accuracy}")
 
-# Puedes evaluar otras métricas como F1-score si las clases están desbalanceadas
-# f1_score = evaluator.evaluate(predictions, {evaluator.metricName: "f1"})
-# print(f"F1 Score = {f1_score}")
+# Guardar los resultados del análisis ML en S3
+# Añadir la fecha actual a los resultados para facilitar el particionamiento si se desea
+results_df = predictions.select("titular", "categoria", "enlace", "prediction") \
+                        .withColumn("fecha_ejecucion_ml", current_date())
 
-# --- 9. Guardar Resultados en S3 ---
-print(f"Guardando predicciones en S3: {S3_OUTPUT_PATH}")
-# Seleccionar columnas relevantes para la salida
-output_df = predictions.select(
-    "headline",
-    "category",
-    col("label").alias("original_label"), # Renombrar para claridad
-    col("prediction").alias("predicted_label"),
-    col("probability").alias("prediction_probability")
-)
+print(f"Guardando resultados del ML en: {S3_OUTPUT_PATH}")
+# Guardar en formato Parquet, que es optimizado para Spark y consultas futuras
+results_df.write.mode("overwrite").parquet(S3_OUTPUT_PATH)
+print("Resultados del ML guardados exitosamente.")
 
-# Añadir fecha de procesamiento para particionamiento
-output_df = output_df.withColumn("processing_date", current_date())
-
-# Guardar en formato Parquet, particionado por processing_date
-output_df.write.mode("overwrite").parquet(S3_OUTPUT_PATH)
-print("Resultados guardados en S3.")
-
-# --- Detener SparkSession ---
+# Finaliza la sesión de Spark
 spark.stop()
+print("Job Spark finalizado.")

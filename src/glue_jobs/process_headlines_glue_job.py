@@ -1,124 +1,177 @@
 import boto3
 import csv
 from io import StringIO
+from urllib.parse import unquote_plus
 from bs4 import BeautifulSoup
 import re
 import datetime
+import os
 import sys
-
+from dotenv import load_dotenv
 from awsglue.utils import getResolvedOptions
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from pyspark.context import SparkContext
+
+# Carga variables de entorno del archivo .env si existe (solo para desarrollo local)
+load_dotenv()
+
+# Inicializa GlueContext para Glue Job
+sc = SparkContext.getOrCreate()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+
+# Obtiene argumentos del Job de Glue.
+try:
+    args = getResolvedOptions(sys.argv, ['JOB_NAME', 'S3_DATA_BUCKET', 'SOURCE_KEY_PREFIX'])
+    S3_BUCKET_NAME = args['S3_DATA_BUCKET']
+    SOURCE_KEY_PREFIX = args['SOURCE_KEY_PREFIX'] # Ej: headlines/raw/
+except Exception as e:
+    print(f"Advertencia: No se pudieron obtener argumentos de Glue Job. Intentando leer de variables de entorno. Error: {e}")
+    S3_BUCKET_NAME = os.environ.get('S3_DATA_BUCKET')
+    SOURCE_KEY_PREFIX = os.environ.get('SOURCE_KEY_PREFIX', 'headlines/raw/') # Fallback
+
+if not S3_BUCKET_NAME:
+    raise ValueError("S3_DATA_BUCKET no está configurado.")
 
 s3 = boto3.client('s3')
 
-# Obtener parámetros pasados al job de Glue
-# Asegúrate de que 'S3_BUCKET' y 'SOURCE_DATE' se pasen como argumentos.
-args = getResolvedOptions(sys.argv, ['S3_BUCKET', 'SOURCE_DATE'])
-S3_BUCKET_NAME = args['S3_BUCKET']
-SOURCE_DATE = args['SOURCE_DATE'] # Ej: '2023-10-27'
-
-print(f"Iniciando Job de Glue: Procesar Titulares para fecha: {SOURCE_DATE} en bucket: {S3_BUCKET_NAME}")
-
-def extract_news_data_glue(html_content, source_newspaper):
+def extract_news_data_glue(html_content, source_name):
     """
-    CÓDIGO DE EXTRACT_NEWS_DATA (MISMO QUE EN EL LAMBDA)
-    Asegúrate de que este código esté sincronizado con src/lambda_functions/process_headlines.py
-    y que los SELECTORES CSS/ETIQUETAS estén correctos.
+    Extrae titulares, enlaces y categorías del contenido HTML.
+    Adaptado para Glue Job.
+    
+    ¡IMPORTANTE! Los selectores CSS ('article', 'h2.title', etc.) son EJEMPLOS.
+    DEBES inspeccionar el HTML de eltiempo.com y elespectador.com para encontrar
+    los selectores EXACTOS que te permitan extraer los datos correctamente.
     """
-    soup = BeautifulSoup(html_content, 'lxml')
+    soup = BeautifulSoup(html_content, 'html.parser')
     news_items = []
 
-    if source_newspaper == 'el_tiempo':
-        articles = soup.find_all('article', class_='article-card')
-        if not articles: articles = soup.find_all('h2', class_='title')
-
+    if source_name == "eltiempo":
+        # EJEMPLO: Selector para El Tiempo. ¡AJUSTAR!
+        articles = soup.find_all('article', class_=lambda x: x and ('story-card' in x or 'listing-card' in x))
         for article in articles:
-            headline_tag = article.find(['h2', 'h3'], class_='title')
-            link_tag = article.find('a')
-            category_tag = article.find('p', class_='category')
+            title_tag = article.find(['h2', 'h3'], class_=lambda x: x and ('article-title' in x or 'title' in x))
+            link_tag = article.find('a', class_=lambda x: x and ('title' in x or 'story-link' in x))
+            category_tag = article.find('span', class_=lambda x: x and ('category' in x or 'section-name' in x))
 
-            headline = headline_tag.get_text(strip=True) if headline_tag else 'N/A'
-            link = link_tag['href'] if link_tag and 'href' in link_tag.attrs else 'N/A'
-            category = category_tag.get_text(strip=True) if category_tag else 'General'
-
-            if category == 'General' and link and '[eltiempo.com/](https://eltiempo.com/)' in link:
-                match = re.search(r'eltiempo\.com/(?:noticias|deportes|cultura|economia)/([^/]+)/', link)
-                if match: category = match.group(1).replace('-', ' ').title()
-                else:
-                    match = re.search(r'eltiempo\.com/seccion/([^/]+)/', link)
-                    if match: category = match.group(1).replace('-', ' ').title()
-
-            if headline != 'N/A' and link != 'N/A':
-                news_items.append({'category': category, 'headline': headline, 'link': link})
-
-    elif source_newspaper == 'el_espectador':
-        articles = soup.find_all('div', class_='Card-Body')
-        if not articles: articles = soup.find_all('h2', class_='Card-Title')
-
+            title = title_tag.get_text(strip=True) if title_tag else "N/A"
+            link = "https://www.eltiempo.com" + link_tag['href'] if link_tag and link_tag.get('href') else "N/A"
+            category = category_tag.get_text(strip=True) if category_tag else "N/A"
+            
+            if title != "N/A" and link != "N/A":
+                news_items.append({
+                    "categoria": category,
+                    "titular": title,
+                    "enlace": link,
+                    "fecha_extraccion": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                })
+    elif source_name == "elespectador":
+        # EJEMPLO: Selector para El Espectador. ¡AJUSTAR!
+        articles = soup.find_all('article', class_=lambda x: x and ('Card-Container' in x))
         for article in articles:
-            headline_tag = article.find(['h2', 'h3'], class_='Card-Title')
-            link_tag = article.find('a', class_='Card-Link')
-            category_tag = article.find('span', class_='Card-Category')
+            title_tag = article.find('h2', class_=lambda x: x and 'Card-Title' in x)
+            link_tag = article.find('a', class_=lambda x: x and 'Card-Title' in x)
+            category_tag = article.find('span', class_=lambda x: x and 'Card-Category' in x)
 
-            headline = headline_tag.get_text(strip=True) if headline_tag else 'N/A'
-            link = link_tag['href'] if link_tag and 'href' in link_tag.attrs else 'N/A'
-            category = category_tag.get_text(strip=True) if category_tag else 'General'
+            title = title_tag.get_text(strip=True) if title_tag else "N/A"
+            link = link_tag['href'] if link_tag and link_tag.get('href') else "N/A"
+            category = category_tag.get_text(strip=True) if category_tag else "N/A"
 
-            if category == 'General' and link and '[elespectador.com/](https://elespectador.com/)' in link:
-                 match = re.search(r'elespectador\.com/(?:noticias|deportes|cultura|politica|economia)/([^/]+)/', link)
-                 if match: category = match.group(1).replace('-', ' ').title()
-                 else:
-                    match = re.search(r'elespectador\.com/seccion/([^/]+)/', link)
-                    if match: category = match.group(1).replace('-', ' ').title()
-
-            if headline != 'N/A' and link != 'N/A':
-                news_items.append({'category': category, 'headline': headline, 'link': link})
+            if title != "N/A" and link != "N/A":
+                news_items.append({
+                    "categoria": category,
+                    "titular": title,
+                    "enlace": link,
+                    "fecha_extraccion": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                })
+    else:
+        print(f"Fuente de noticias desconocida: {source_name}")
 
     return news_items
 
-
-def process_s3_html_for_glue(date_str):
+def process_html_files_from_s3_glue():
     """
-    Función principal para el Job de Glue que procesa HTML y genera CSVs.
+    Función principal para el Glue Job que procesa archivos HTML de S3.
+    Escanea el prefijo `headlines/raw/` y procesa los nuevos archivos.
     """
-    year, month, day = date_str.split('-')
-    newspapers = ['el_tiempo', 'el_espectador'] # Lista de periódicos que descargas
+    print(f"Iniciando procesamiento de archivos HTML de S3 como Glue Job. Bucket: {S3_BUCKET_NAME}, Prefijo: {SOURCE_KEY_PREFIX}")
 
-    for name in newspapers:
-        raw_s3_key = f'headlines/raw/{name}-contenido-{date_str}.html'
-        print(f"Intentando procesar archivo raw: {raw_s3_key}")
+    # Lista todos los objetos en el prefijo de entrada
+    objects_to_process = []
+    paginator = s3.get_paginator('list_objects_v2')
+    pages = paginator.paginate(Bucket=S3_BUCKET_NAME, Prefix=SOURCE_KEY_PREFIX)
 
+    for page in pages:
+        if 'Contents' in page:
+            for obj in page['Contents']:
+                key = obj['Key']
+                if key.endswith('.html'):
+                    objects_to_process.append(key)
+
+    if not objects_to_process:
+        print(f"No se encontraron archivos HTML en s3://{S3_BUCKET_NAME}/{SOURCE_KEY_PREFIX} para procesar.")
+        return
+
+    for key in objects_to_process:
+        print(f"Procesando el archivo S3: {key}")
         try:
-            obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=raw_s3_key)
-            html_content = obj['Body'].read().decode('utf-8')
+            # Descargar el archivo HTML
+            response = s3.get_object(Bucket=S3_BUCKET_NAME, Key=key)
+            html_content = response['Body'].read().decode('utf-8')
 
-            extracted_data = extract_news_data_glue(html_content, name)
+            # Extraer el nombre de la fuente (ej: eltiempo, elespectador)
+            path_parts = key.split('/')
+            source_name = path_parts[2] if len(path_parts) > 2 else "unknown"
+            print(f"Fuente de noticias detectada: {source_name}")
 
-            if not extracted_data:
-                print(f"No se extrajo información de noticias de {raw_s3_key}. Saltando creación de CSV.")
+            # Extraer datos de noticias
+            news_data = extract_news_data_glue(html_content, source_name)
+            
+            if not news_data:
+                print(f"No se pudieron extraer datos de noticias del archivo: {key}.")
                 continue
 
-            csv_buffer = StringIO()
-            fieldnames = ['category', 'headline', 'link']
-            writer = csv.DictWriter(csv_buffer, fieldnames=fieldnames)
+            # Preparar datos para CSV
+            output_buffer = StringIO()
+            fieldnames = ["categoria", "titular", "enlace", "fecha_extraccion"]
+            writer = csv.DictWriter(output_buffer, fieldnames=fieldnames, delimiter=';')
             writer.writeheader()
-            for item in extracted_data:
-                writer.writerow(item)
+            writer.writerows(news_data)
 
-            csv_content = csv_buffer.getvalue()
+            # Determinar el path de salida particionado
+            date_part = key.split('/')[-2]
+            if re.match(r'\d{4}-\d{2}-\d{2}', date_part):
+                year, month, day = date_part.split('-')
+            else:
+                now = datetime.datetime.now()
+                year = now.strftime("%Y")
+                month = now.strftime("%m")
+                day = now.strftime("%d")
+                print(f"Advertencia: No se pudo extraer la fecha del path '{key}'. Usando fecha actual.")
 
-            csv_s3_key = (f'headlines/final/periodico={name}/year={year}/'
-                          f'month={month}/day={day}/{name}_headlines.csv')
+            output_key = (
+                f"headlines/final/"
+                f"periodico={source_name}/"
+                f"year={year}/"
+                f"month={month}/"
+                f"day={day}/"
+                f"{source_name}_{date_part if re.match(r'\d{4}-\d{2}-\d{2}', date_part) else datetime.datetime.now().strftime('%Y-%m-%d')}.csv"
+            )
 
-            print(f"Subiendo CSV a s3://{S3_BUCKET_NAME}/{csv_s3_key}...")
-            s3.put_object(Bucket=S3_BUCKET_NAME, Key=csv_s3_key, Body=csv_content.encode('utf-8'), ContentType='text/csv')
-            print(f"Procesado exitosamente {raw_s3_key} y subido CSV.")
+            # Subir el CSV a S3
+            print(f"Subiendo datos CSV procesados a s3://{S3_BUCKET_NAME}/{output_key}")
+            s3.put_object(Bucket=S3_BUCKET_NAME, Key=output_key, Body=output_buffer.getvalue())
+            print(f"Archivo {output_key} subido exitosamente.")
 
-        except s3.exceptions.NoSuchKey:
-            print(f"Archivo raw {raw_s3_key} no encontrado. Saltando procesamiento para este periódico en esta fecha.")
         except Exception as e:
-            print(f"Error procesando {raw_s3_key}: {e}")
-
-    print("Procesamiento HTML y carga de CSV completados para Job de Glue 2.")
+            print(f"Error al procesar el archivo {key}: {e}")
+            # Considera marcar el Job como fallido o re-lanzar si es un error crítico
+            # raise e # Descomentar para que el Job falle si hay un error en un archivo
 
 if __name__ == '__main__':
-    process_s3_html_for_glue(SOURCE_DATE)
+    job.init(args['JOB_NAME'], args)
+    process_html_files_from_s3_glue()
+    job.commit()

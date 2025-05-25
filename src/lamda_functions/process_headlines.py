@@ -4,155 +4,180 @@ from io import StringIO
 from urllib.parse import unquote_plus
 from bs4 import BeautifulSoup
 import re
+import datetime
 import os
+from dotenv import load_dotenv
+
+# Carga variables de entorno del archivo .env si existe (solo para desarrollo local)
+load_dotenv()
 
 s3 = boto3.client('s3')
 
-def extract_news_data(html_content, source_newspaper):
+# Obtiene el nombre del bucket S3 de las variables de entorno
+S3_BUCKET_NAME = os.environ.get('S3_DATA_BUCKET')
+
+def extract_news_data(html_content, source_name):
     """
-    EXTRAE CATEGORÍA, TITULAR Y ENLACE DE LA NOTICIA USANDO BEAUTIFUL SOUP.
-    !!! ESTA FUNCIÓN REQUIERE INSPECCIÓN MANUAL DEL HTML DE CADA PERIÓDICO !!!
-    Los selectores CSS/etiquetas usados aquí son EJEMPLOS y probablemente
-    necesitarán ser ajustados para el HTML actual de El Tiempo y El Espectador.
+    Extrae titulares, enlaces y categorías del contenido HTML.
+    
+    ¡IMPORTANTE! Los selectores CSS ('article', 'h2.title', etc.) son EJEMPLOS.
+    DEBES inspeccionar el HTML de eltiempo.com y elespectador.com para encontrar
+    los selectores EXACTOS que te permitan extraer los datos correctamente.
     """
-    soup = BeautifulSoup(html_content, 'lxml') # Usamos lxml para mayor velocidad y robustez
+    soup = BeautifulSoup(html_content, 'html.parser')
     news_items = []
 
-    if source_newspaper == 'el_tiempo':
-        # --- INICIA TU INSPECCIÓN HTML AQUÍ PARA EL TIEMPO ---
-        # Busca un patrón común para los artículos. Ej: div con clase 'article-card'
-        articles = soup.find_all('article', class_='article-card') # O 'div', 'li', etc.
-
-        if not articles:
-            # Intenta con otro patrón si el primero no encuentra nada
-            articles = soup.find_all('h2', class_='title') # Puede ser que solo el titular sea el elemento clave
-
+    if source_name == "eltiempo":
+        # EJEMPLO: Selector para El Tiempo. ¡AJUSTAR!
+        # Busca un contenedor general de noticias, luego los elementos dentro
+        articles = soup.find_all('article', class_=lambda x: x and ('story-card' in x or 'listing-card' in x))
         for article in articles:
-            # Ejemplo: Buscar titular dentro del artículo
-            headline_tag = article.find(['h2', 'h3'], class_='title') # Busca h2 o h3 con clase 'title'
-            link_tag = article.find('a') # Busca el primer enlace dentro del artículo
-            category_tag = article.find('p', class_='category') # Busca la categoría explícita
+            title_tag = article.find(['h2', 'h3'], class_=lambda x: x and ('article-title' in x or 'title' in x))
+            link_tag = article.find('a', class_=lambda x: x and ('title' in x or 'story-link' in x))
+            category_tag = article.find('span', class_=lambda x: x and ('category' in x or 'section-name' in x))
 
-            headline = headline_tag.get_text(strip=True) if headline_tag else 'N/A'
-            link = link_tag['href'] if link_tag and 'href' in link_tag.attrs else 'N/A'
-            category = category_tag.get_text(strip=True) if category_tag else 'General'
-
-            # Intenta inferir la categoría desde el enlace si no se encontró explícitamente
-            if category == 'General' and link and '[eltiempo.com/](https://eltiempo.com/)' in link:
-                # Patrón para extraer categoría de la URL: /noticias/CATEGORIA/
-                match = re.search(r'eltiempo\.com/(?:noticias|deportes|cultura|economia)/([^/]+)/', link)
-                if match:
-                    category = match.group(1).replace('-', ' ').title()
-                else:
-                    # Intenta un patrón más general si el anterior falla
-                    match = re.search(r'eltiempo\.com/seccion/([^/]+)/', link)
-                    if match:
-                        category = match.group(1).replace('-', ' ').title()
-
-            if headline != 'N/A' and link != 'N/A': # Solo añade si los datos esenciales se encontraron
+            title = title_tag.get_text(strip=True) if title_tag else "N/A"
+            link = "https://www.eltiempo.com" + link_tag['href'] if link_tag and link_tag.get('href') else "N/A"
+            category = category_tag.get_text(strip=True) if category_tag else "N/A"
+            
+            if title != "N/A" and link != "N/A": # Filtra entradas inválidas
                 news_items.append({
-                    'category': category,
-                    'headline': headline,
-                    'link': link
+                    "categoria": category,
+                    "titular": title,
+                    "enlace": link,
+                    "fecha_extraccion": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 })
-        # --- TERMINA TU INSPECCIÓN HTML AQUÍ PARA EL TIEMPO ---
-
-    elif source_newspaper == 'el_espectador':
-        # --- INICIA TU INSPECCIÓN HTML AQUÍ PARA EL ESPECTADOR ---
-        articles = soup.find_all('div', class_='Card-Body') # O 'article', 'div' con clase específica
-
-        if not articles:
-            articles = soup.find_all('h2', class_='Card-Title') # Otro patrón posible
-
+    elif source_name == "elespectador":
+        # EJEMPLO: Selector para El Espectador. ¡AJUSTAR!
+        # Busca un contenedor general de noticias, luego los elementos dentro
+        articles = soup.find_all('article', class_=lambda x: x and ('Card-Container' in x))
         for article in articles:
-            headline_tag = article.find(['h2', 'h3'], class_='Card-Title')
-            link_tag = article.find('a', class_='Card-Link')
-            category_tag = article.find('span', class_='Card-Category')
+            title_tag = article.find('h2', class_=lambda x: x and 'Card-Title' in x)
+            link_tag = article.find('a', class_=lambda x: x and 'Card-Title' in x)
+            category_tag = article.find('span', class_=lambda x: x and 'Card-Category' in x)
 
-            headline = headline_tag.get_text(strip=True) if headline_tag else 'N/A'
-            link = link_tag['href'] if link_tag and 'href' in link_tag.attrs else 'N/A'
-            category = category_tag.get_text(strip=True) if category_tag else 'General'
+            title = title_tag.get_text(strip=True) if title_tag else "N/A"
+            link = link_tag['href'] if link_tag and link_tag.get('href') else "N/A"
+            category = category_tag.get_text(strip=True) if category_tag else "N/A"
 
-            if category == 'General' and link and '[elespectador.com/](https://elespectador.com/)' in link:
-                 match = re.search(r'elespectador\.com/(?:noticias|deportes|cultura|politica|economia)/([^/]+)/', link)
-                 if match:
-                    category = match.group(1).replace('-', ' ').title()
-                 else:
-                    match = re.search(r'elespectador\.com/seccion/([^/]+)/', link)
-                    if match:
-                        category = match.group(1).replace('-', ' ').title()
-
-            if headline != 'N/A' and link != 'N/A':
+            if title != "N/A" and link != "N/A": # Filtra entradas inválidas
                 news_items.append({
-                    'category': category,
-                    'headline': headline,
-                    'link': link
+                    "categoria": category,
+                    "titular": title,
+                    "enlace": link,
+                    "fecha_extraccion": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 })
-        # --- TERMINA TU INSPECCIÓN HTML AQUÍ PARA EL ESPECTADOR ---
+    else:
+        print(f"Fuente de noticias desconocida: {source_name}")
 
     return news_items
 
 def process_s3_html_event(event, context):
     """
-    Función Lambda activada por eventos de creación de objetos en S3 (prefijo 'headlines/raw/').
-    Procesa el HTML, extrae los datos y los guarda como CSV en el prefijo 'headlines/final/'.
+    Procesa un evento de S3 cuando se crea un archivo HTML.
+    Extrae datos y los guarda como CSV en otra ubicación de S3.
     """
+    if not S3_BUCKET_NAME:
+        print("Error: La variable de entorno 'S3_DATA_BUCKET' no está configurada.")
+        return {'statusCode': 500, 'body': 'S3_DATA_BUCKET environment variable not set.'}
+
+    print(f"Bucket de datos principal: {S3_BUCKET_NAME}")
+
     for record in event['Records']:
         bucket_name = record['s3']['bucket']['name']
-        key = unquote_plus(record['s3']['object']['key']) # Decodifica la clave URL-encoded
+        key = unquote_plus(record['s3']['object']['key'])
 
-        print(f"Procesando objeto S3: {key} desde bucket: {bucket_name}")
+        if not key.endswith('.html'):
+            print(f"Saltando el archivo no HTML: {key}")
+            continue
+
+        print(f"Procesando el archivo S3: {key} del bucket: {bucket_name}")
 
         try:
-            # 1. Descargar el contenido HTML
-            obj = s3.get_object(Bucket=bucket_name, Key=key)
-            html_content = obj['Body'].read().decode('utf-8')
+            # Descargar el archivo HTML
+            response = s3.get_object(Bucket=bucket_name, Key=key)
+            html_content = response['Body'].read().decode('utf-8')
 
-            # 2. Determinar el periódico y la fecha desde la clave del objeto S3
-            # Formato esperado de la clave: headlines/raw/periodico-contenido-yyyy-mm-dd.html
-            parts = key.split('/')
-            filename = parts[-1] # Ej: el_tiempo-contenido-2023-10-27.html
-            name_parts = filename.split('-contenido-')
-            if len(name_parts) < 2:
-                print(f"Saltando clave mal formada: {key}")
+            # Extraer el nombre de la fuente del path (ej: eltiempo, elespectador)
+            # Asume el formato: headlines/raw/{source_name}/...
+            path_parts = key.split('/')
+            if len(path_parts) > 2:
+                source_name = path_parts[2]
+            else:
+                source_name = "unknown"
+            print(f"Fuente de noticias detectada: {source_name}")
+
+            # Extraer datos de noticias
+            news_data = extract_news_data(html_content, source_name)
+            
+            if not news_data:
+                print(f"No se pudieron extraer datos de noticias del archivo: {key}. Posiblemente los selectores son incorrectos o no hay noticias.")
                 continue
 
-            newspaper_name = name_parts[0] # Ej: el_tiempo
-            date_str = name_parts[1].replace('.html', '') # Ej: 2023-10-27
-            year, month, day = date_str.split('-')
-
-            # 3. Extraer datos usando Beautiful Soup
-            extracted_data = extract_news_data(html_content, newspaper_name)
-
-            if not extracted_data:
-                print(f"No se extrajo información de noticias de {key}. Saltando creación de CSV.")
-                continue
-
-            # 4. Preparar contenido CSV en memoria
-            csv_buffer = StringIO()
-            fieldnames = ['category', 'headline', 'link']
-            writer = csv.DictWriter(csv_buffer, fieldnames=fieldnames)
+            # Preparar datos para CSV
+            output_buffer = StringIO()
+            fieldnames = ["categoria", "titular", "enlace", "fecha_extraccion"]
+            writer = csv.DictWriter(output_buffer, fieldnames=fieldnames, delimiter=';') # Usar ; como delimitador
             writer.writeheader()
-            for item in extracted_data:
-                writer.writerow(item)
+            writer.writerows(news_data)
 
-            csv_content = csv_buffer.getvalue()
+            # Determinar el path de salida particionado
+            # Espera que el key sea: headlines/raw/{source_name}/{fecha}/{nombre_archivo}.html
+            # Ej: headlines/raw/eltiempo/2023-10-26/eltiempo_2023-10-26.html
+            # Salida: headlines/final/periodico=eltiempo/year=2023/month=10/day=26/eltiempo_2023-10-26.csv
+            
+            # Extraer fecha del path
+            date_part = key.split('/')[-2] # Asume que la fecha es el penúltimo elemento del path
+            if re.match(r'\d{4}-\d{2}-\d{2}', date_part):
+                year, month, day = date_part.split('-')
+            else:
+                # Si la fecha no se puede extraer, usar la fecha actual como fallback
+                now = datetime.datetime.now()
+                year = now.strftime("%Y")
+                month = now.strftime("%m")
+                day = now.strftime("%d")
+                print(f"Advertencia: No se pudo extraer la fecha del path '{key}'. Usando fecha actual: {year}-{month}-{day}")
 
-            # 5. Definir la clave S3 destino para el CSV (estructura particionada)
-            # s3://bucket/headlines/final/periodico=xxx/year=xxx/month=xxx/day=xxx/data.csv
-            csv_s3_key = (f'headlines/final/periodico={newspaper_name}/year={year}/'
-                          f'month={month}/day={day}/{newspaper_name}_headlines.csv')
 
-            # 6. Subir CSV a S3
-            print(f"Subiendo CSV a s3://{bucket_name}/{csv_s3_key}...")
-            s3.put_object(Bucket=bucket_name, Key=csv_s3_key, Body=csv_content.encode('utf-8'), ContentType='text/csv')
-            print(f"Procesado exitosamente {key} y subido CSV.")
+            output_key = (
+                f"headlines/final/"
+                f"periodico={source_name}/"
+                f"year={year}/"
+                f"month={month}/"
+                f"day={day}/"
+                f"{source_name}_{date_part if re.match(r'\d{4}-\d{2}-\d{2}', date_part) else datetime.datetime.now().strftime('%Y-%m-%d')}.csv"
+            )
+
+            # Subir el CSV a S3
+            print(f"Subiendo datos CSV procesados a s3://{S3_BUCKET_NAME}/{output_key}")
+            s3.put_object(Bucket=S3_BUCKET_NAME, Key=output_key, Body=output_buffer.getvalue())
+            print(f"Archivo {output_key} subido exitosamente.")
 
         except Exception as e:
-            print(f"Error procesando {key}: {e}")
-            # Puedes considerar re-lanzar la excepción o enviar una notificación de error
+            print(f"Error al procesar el archivo {key}: {e}")
+            # Puedes optar por re-lanzar la excepción o registrar el error para la depuración
+            raise e
 
-    return {
-        'statusCode': 200,
-        'body': 'Procesamiento HTML y carga de CSV completados.'
+    return {'statusCode': 200, 'body': 'Procesamiento de eventos S3 completado.'}
+
+# Para pruebas locales
+if __name__ == "__main__":
+    # Simula un evento S3 para pruebas locales
+    mock_s3_event = {
+        "Records": [
+            {
+                "eventSource": "aws:s3",
+                "s3": {
+                    "bucket": {"name": "devlepa-noticias-data"}, # Reemplaza con tu bucket de prueba
+                    "object": {"key": "headlines/raw/elespectador/2025-05-25/elespectador_2025-05-25.html"} # Ruta de prueba
+                }
+            }
+        ]
     }
+    # Para que esta prueba local funcione, necesitarías:
+    # 1. Un archivo HTML en esa ruta S3.
+    # 2. Credenciales de AWS configuradas en tu entorno local (o en .env si las descomentas).
+    # 3. Que los selectores HTML sean correctos para el contenido del HTML de prueba.
+    print("Ejecutando proceso de headlines localmente...")
+    response = process_s3_html_event(mock_s3_event, None)
+    print(response)

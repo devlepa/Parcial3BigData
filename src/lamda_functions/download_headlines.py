@@ -2,54 +2,64 @@ import requests
 import boto3
 import datetime
 import os
-import sys
+from dotenv import load_dotenv
 
-# Initialize S3 client
-s3 = boto3.client('s3', region_name='us-east-1')
+# Carga variables de entorno del archivo .env si existe (solo para desarrollo local)
+load_dotenv()
 
-# Get S3 bucket name from environment variable
-# IMPORTANT: This will be set by Zappa's environment_variables in zappa_settings.json
-S3_BUCKET_NAME = os.environ.get('S3_BUCKET', 'your-default-bucket-if-not-set')
+s3 = boto3.client('s3')
+
+# Obtiene el nombre del bucket S3 de las variables de entorno
+S3_BUCKET_NAME = os.environ.get('S3_DATA_BUCKET')
 
 def download_and_upload_to_s3(event, context):
     """
-    Lambda function to download news headlines and upload raw HTML to S3.
-    Triggered on a schedule (e.g., daily).
+    Descarga titulares de El Tiempo y El Espectador y los sube a S3.
     """
-    today = datetime.date.today()
-    date_str = today.strftime('%Y-%m-%d')
+    if not S3_BUCKET_NAME:
+        print("Error: La variable de entorno 'S3_DATA_BUCKET' no está configurada.")
+        return {'statusCode': 500, 'body': 'S3_DATA_BUCKET environment variable not set.'}
 
-    newspapers = {
-        'el_tiempo': '[https://www.eltiempo.com/](https://www.eltiempo.com/)',
-        'el_espectador': '[https://www.elespectador.com/](https://www.elespectador.com/)',
+    print(f"Iniciando descarga y subida a S3. Bucket destino: {S3_BUCKET_NAME}")
+
+    current_date = datetime.datetime.now().strftime("%Y-%m-%d")
+
+    # URL y prefijos de archivos
+    news_sources = {
+        "eltiempo": "https://www.eltiempo.com/",
+        "elespectador": "https://www.elespectador.com/"
     }
 
-    print(f"Starting download and upload for date: {date_str} to bucket: {S3_BUCKET_NAME}")
-
-    for name, url in newspapers.items():
+    results = []
+    for source_name, url in news_sources.items():
         try:
-            print(f"Attempting to download {url}...")
-            response = requests.get(url, timeout=15) # Increased timeout
-            response.raise_for_status() # Raise an HTTPError for bad responses (4xx or 5xx)
-            content = response.text
+            print(f"Descargando de {source_name} desde {url}")
+            response = requests.get(url, timeout=10)
+            response.raise_for_status() # Lanza un error para códigos de estado HTTP erróneos
 
-            s3_key = f'headlines/raw/{name}-contenido-{date_str}.html'
+            html_content = response.text
+            file_key = f"headlines/raw/{source_name}/{current_date}/{source_name}_{current_date}.html"
 
-            print(f"Uploading {name} content to s3://{S3_BUCKET_NAME}/{s3_key}...")
-            s3.put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=content.encode('utf-8'), ContentType='text/html')
-            print(f"Successfully uploaded {name} content.")
+            print(f"Subiendo {source_name} HTML a s3://{S3_BUCKET_NAME}/{file_key}")
+            s3.put_object(Bucket=S3_BUCKET_NAME, Key=file_key, Body=html_content)
+            results.append(f"Successfully uploaded {source_name} to {file_key}")
 
         except requests.exceptions.RequestException as e:
-            print(f"Error downloading {url}: {e}")
-            # Optionally, log to a different system or trigger an alert
-        except boto3.exceptions.S3UploadFailedError as e:
-            print(f"Error uploading to S3 for {name} ({url}): {e}")
+            error_message = f"Error al descargar de {source_name}: {e}"
+            print(error_message)
+            results.append(error_message)
         except Exception as e:
-            print(f"An unexpected error occurred for {name} ({url}): {e}")
-
-    print("Download and upload process completed.")
+            error_message = f"Error inesperado al procesar {source_name}: {e}"
+            print(error_message)
+            results.append(error_message)
 
     return {
         'statusCode': 200,
-        'body': 'Download and upload process completed.'
+        'body': f'Descarga y subida de titulares completada: {"; ".join(results)}'
     }
+
+# Para pruebas locales o si se ejecuta directamente
+if __name__ == "__main__":
+    # Asegúrate de tener el .env configurado con S3_DATA_BUCKET
+    response = download_and_upload_to_s3(None, None)
+    print(response)

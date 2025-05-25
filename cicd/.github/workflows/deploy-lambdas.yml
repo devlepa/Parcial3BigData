@@ -1,29 +1,20 @@
-# .github/workflows/deploy-lambdas.yml
 name: Deploy Zappa Lambdas to AWS
 
 on:
   push:
     branches:
-      - main # O 'develop' si tienes una rama de desarrollo
+      - main
     paths:
-      - 'src/lambda_functions/**' # Se dispara si el código de Lambda cambia
+      - 'src/lambda_functions/**'
       - 'src/zappa_settings.json'
-      - 'src/environment.yml' # O si tu archivo de Conda cambia
+      - 'src/environment.yml'
+      - '.github/workflows/deploy-lambdas.yml'
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      AWS_REGION: us-east-1 # Tu región de AWS
-      S3_DATA_BUCKET: [TU_NOMBRE_DE_USUARIO]-noticias-data
-      GLUE_CRAWLER_NAME: headlines_csv_crawler
-      EMR_LOGS_BUCKET: [TU_NOMBRE_DE_USUARIO]-emr-logs
-      EC2_SUBNET_ID: [TU_SUBNET_ID]
-      EC2_KEY_PAIR: [TU_EC2_KEY_PAIR_NAME]
-      EMR_SERVICE_ROLE: EMR_DefaultRole
-      EC2_INSTANCE_PROFILE: EMR_EC2_DefaultRole
-      S3_SCRIPTS_BUCKET: [TU_NOMBRE_DE_USUARIO]-glue-scripts
-      BOOTSTRAP_ACTION_PATH: s3://[TU_NOMBRE_DE_USUARIO]-glue-scripts/bootstrap/install_pyspark_deps.sh
+      AWS_REGION: ${{ secrets.AWS_REGION }} # Lee la región de los GitHub Secrets
 
     steps:
     - name: Checkout code
@@ -32,49 +23,46 @@ jobs:
     - name: Set up Miniconda
       uses: conda-incubator/setup-miniconda@v3
       with:
-        python-version: 3.9 # Debe coincidir con el python= en environment.yml
-        environment-file: src/environment.yml # Ruta a tu archivo environment.yml
-        activate-environment: parcial3_env # Nombre de tu entorno Conda
-        auto-activate-base: false # No activar el entorno base por defecto
+        python-version: 3.9
+        environment-file: src/environment.yml
+        activate-environment: parcial3_env
+        auto-activate-base: false
 
     - name: Configure AWS Credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: <span class="math-inline">\{\{ env\.AWS\_REGION \}\}
-\- name\: Configure Zappa Settings for CI/CD
-\# Reemplaza los placeholders en zappa\_settings\.json con los valores correctos
-run\: \|
-sed \-i 's\|\\\[TU\_NOMBRE\_DE\_USUARIO\\\]\-zappa\-deploy\|</span>{{ secrets.ZAPPA_DEPLOY_BUCKET }}|g' src/zappa_settings.json
-        sed -i 's|\[TU_NOMBRE_DE_USUARIO\]-noticias-data|<span class="math-inline">\{\{ env\.S3\_DATA\_BUCKET \}\}\|g' src/zappa\_settings\.json
-sed \-i 's\|headlines\_csv\_crawler\|</span>{{ env.GLUE_CRAWLER_NAME }}|g' src/zappa_settings.json
-        sed -i 's|s3://your-emr-logs-bucket/emr-logs/|<span class="math-inline">\{\{ env\.EMR\_LOGS\_BUCKET \}\}/emr\-logs/\|g' src/zappa\_settings\.json
-sed \-i 's\|\\\[TU\_SUBNET\_ID\\\]\|</span>{{ env.EC2_SUBNET_ID }}|g' src/zappa_settings.json
-        sed -i 's|\[TU_EC2_KEY_PAIR_NAME\]|<span class="math-inline">\{\{ env\.EC2\_KEY\_PAIR \}\}\|g' src/zappa\_settings\.json
-sed \-i 's\|EMR\_DefaultRole\|</span>{{ env.EMR_SERVICE_ROLE }}|g' src/zappa_settings.json
-        sed -i 's|EMR_EC2_DefaultRole|<span class="math-inline">\{\{ env\.EC2\_INSTANCE\_PROFILE \}\}\|g' src/zappa\_settings\.json
-sed \-i 's\|s3\://your\-glue\-scripts\-bucket/scripts/run\_ml\_pipeline\.py\|</span>{{ env.S3_SCRIPTS_BUCKET }}/scripts/run_ml_pipeline.py|g' src/zappa_settings.json
-        sed -i 's|s3://your-glue-scripts-bucket/bootstrap/install_pyspark_deps.sh|${{ env.BOOTSTRAP_ACTION_PATH }}|g' src/zappa_settings.json
+        aws-region: ${{ env.AWS_REGION }} # Usa la variable de entorno del job
 
-    - name: Run Unit Tests
+    - name: Configure Zappa Settings for CI/CD
+      run: |
+        cd src
+        # Reemplazar placeholders en zappa_settings.json con los valores de GitHub Secrets
+        sed -i 's|DUMMY_S3_ZAPPA_DEPLOY_BUCKET|${{ secrets.S3_ZAPPA_DEPLOY_BUCKET }}|g' zappa_settings.json
+        sed -i 's|DUMMY_S3_DATA_BUCKET|${{ secrets.S3_DATA_BUCKET }}|g' zappa_settings.json
+        sed -i 's|DUMMY_S3_GLUE_SCRIPTS_BUCKET|${{ secrets.S3_GLUE_SCRIPTS_BUCKET }}|g' zappa_settings.json
+        sed -i 's|DUMMY_S3_EMR_LOGS_BUCKET|${{ secrets.S3_EMR_LOGS_BUCKET }}|g' zappa_settings.json
+        sed -i 's|DUMMY_GLUE_CRAWLER_NAME|${{ secrets.GLUE_CRAWLER_NAME }}|g' zappa_settings.json
+        sed -i 's|DUMMY_GLUE_RDS_CONNECTION_NAME|${{ secrets.GLUE_RDS_CONNECTION_NAME }}|g' zappa_settings.json
+        sed -i 's|DUMMY_EMR_CLUSTER_NAME|${{ secrets.EMR_CLUSTER_NAME }}|g' zappa_settings.json
+        sed -i 's|DUMMY_EMR_RELEASE_LABEL|${{ secrets.EMR_RELEASE_LABEL }}|g' zappa_settings.json
+        sed -i 's|DUMMY_EC2_SUBNET_ID|${{ secrets.EC2_SUBNET_ID }}|g' zappa_settings.json
+        sed -i 's|DUMMY_EC2_KEY_PAIR|${{ secrets.EC2_KEY_PAIR }}|g' zappa_settings.json
+        sed -i 's|DUMMY_EMR_SERVICE_ROLE|${{ secrets.EMR_SERVICE_ROLE }}|g' zappa_settings.json
+        sed -i 's|DUMMY_EC2_INSTANCE_PROFILE|${{ secrets.EC2_INSTANCE_PROFILE }}|g' zappa_settings.json
+        sed -i 's|DUMMY_S3_SCRIPT_LOCATION|${{ secrets.S3_SCRIPT_LOCATION }}|g' zappa_settings.json
+        sed -i 's|DUMMY_BOOTSTRAP_ACTION_PATH|${{ secrets.BOOTSTRAP_ACTION_PATH }}|g' zappa_settings.json
+        
+        # Imprime el zappa_settings.json final para depuración
+        cat zappa_settings.json
+
+    - name: Run Unit Tests (Lambda Functions)
       run: |
         pytest tests/unit/lambda_functions/
+      working-directory: ${{ github.workspace }}
 
     - name: Deploy Zappa Lambdas
       run: |
         cd src
         zappa update dev --json
-      env:
-        # Se asegura de que las variables de entorno estén disponibles para Zappa
-        S3_BUCKET: ${{ env.S3_DATA_BUCKET }}
-        GLUE_CRAWLER_NAME: ${{ env.GLUE_CRAWLER_NAME }}
-        EMR_CLUSTER_NAME: ${{ env.EMR_CLUSTER_NAME }}
-        EMR_RELEASE_LABEL: ${{ env.EMR_RELEASE_LABEL }}
-        EMR_LOG_URI: ${{ env.EMR_LOGS_BUCKET }}
-        EC2_SUBNET_ID: ${{ env.EC2_SUBNET_ID }}
-        EC2_KEY_PAIR: ${{ env.EC2_KEY_PAIR }}
-        EMR_SERVICE_ROLE: ${{ env.EMR_SERVICE_ROLE }}
-        EC2_INSTANCE_PROFILE: ${{ env.EC2_INSTANCE_PROFILE }}
-        S3_SCRIPT_LOCATION: ${{ env.S3_SCRIPTS_BUCKET }}/scripts/run_ml_pipeline.py
-        BOOTSTRAP_ACTION_PATH: ${{ env.BOOTSTRAP_ACTION_PATH }}

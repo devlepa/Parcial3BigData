@@ -1,73 +1,75 @@
 import pytest
-import boto3
-from moto import mock_aws
-import requests_mock
 import os
-import datetime # Importar datetime para la fecha actual
+import requests_mock
+from moto import mock_aws
+from src.lambda_functions.download_headlines import download_and_upload_to_s3, s3
 
-# Mockear la variable de entorno para el nombre del bucket
+# Mock para S3 (usando moto) y requests (para HTTP)
+@mock_aws
+def test_download_and_upload_success():
+    """
+    Testea que la función descarga HTML y lo sube correctamente a S3.
+    """
+    # Configurar un bucket S3 de prueba para moto
+    test_bucket = "test-noticias-data-bucket"
+    os.environ['S3_DATA_BUCKET'] = test_bucket # Establecer la variable de entorno para que la Lambda la lea
+    s3.create_bucket(Bucket=test_bucket)
+
+    # Simular respuestas HTTP de los sitios de noticias
+    with requests_mock.Mocker() as m:
+        m.get("https://www.eltiempo.com/", text="<html><body><h1>El Tiempo News</h1></body></html>")
+        m.get("https://www.elespectador.com/", text="<html><body><h2>El Espectador News</h2></body></html>")
+
+        # Ejecutar la función Lambda
+        response = download_and_upload_to_s3(None, None)
+
+        # Verificar el resultado
+        assert response['statusCode'] == 200
+        assert "Successfully uploaded eltiempo" in response['body']
+        assert "Successfully uploaded elespectador" in response['body']
+
+        # Verificar que los archivos fueron subidos a S3
+        current_date = datetime.datetime.now().strftime("%Y-%m-%d")
+        eltiempo_key = f"headlines/raw/eltiempo/{current_date}/eltiempo_{current_date}.html"
+        elespectador_key = f"headlines/raw/elespectador/{current_date}/elespectador_{current_date}.html"
+
+        eltiempo_obj = s3.get_object(Bucket=test_bucket, Key=eltiempo_key)
+        elespectador_obj = s3.get_object(Bucket=test_bucket, Key=elespectador_key)
+
+        assert eltiempo_obj['Body'].read().decode('utf-8') == "<html><body><h1>El Tiempo News</h1></body></html>"
+        assert elespectador_obj['Body'].read().decode('utf-8') == "<html><body><h2>El Espectador News</h2></body></html>"
+
+@mock_aws
+def test_download_and_upload_http_error():
+    """
+    Testea que la función maneja errores HTTP al descargar.
+    """
+    test_bucket = "test-noticias-data-bucket-error"
+    os.environ['S3_DATA_BUCKET'] = test_bucket
+    s3.create_bucket(Bucket=test_bucket)
+
+    with requests_mock.Mocker() as m:
+        m.get("https://www.eltiempo.com/", status_code=500) # Simular error 500
+        m.get("https://www.elespectador.com/", text="<html><body><h2>El Espectador News</h2></body></html>")
+
+        response = download_and_upload_to_s3(None, None)
+
+        assert response['statusCode'] == 200 # La Lambda no falla si una fuente falla, solo registra el error
+        assert "Error al descargar de eltiempo" in response['body']
+        assert "Successfully uploaded elespectador" in response['body']
+
+        # Verificar que el archivo de El Tiempo no se subió (o se subió incorrectamente)
+        current_date = datetime.datetime.now().strftime("%Y-%m-%d")
+        eltiempo_key = f"headlines/raw/eltiempo/{current_date}/eltiempo_{current_date}.html"
+        with pytest.raises(s3.exceptions.NoSuchKey):
+            s3.get_object(Bucket=test_bucket, Key=eltiempo_key) # Debería lanzar error porque no existe
+
+# Limpia la variable de entorno después de cada test (opcional pero buena práctica)
 @pytest.fixture(autouse=True)
-def set_env_vars():
-    os.environ['S3_BUCKET'] = 'test-bucket-for-headlines'
+def run_around_tests():
+    original_s3_bucket = os.environ.get('S3_DATA_BUCKET')
     yield
-    del os.environ['S3_BUCKET']
-
-@mock_aws
-@requests_mock.Mocker()
-def test_download_and_upload_to_s3_success(requests_mocker, capsys):
-    # Importar la función *dentro* del test mockeado para que boto3 sea mockeado correctamente
-    from src.lambda_functions.download_headlines import download_and_upload_to_s3
-
-    s3_client = boto3.client('s3', region_name='us-east-1')
-    s3_client.create_bucket(Bucket=os.environ['S3_BUCKET'])
-
-    eltiempo_content = "<html><body><h1>El Tiempo Headline</h1></body></html>"
-    elespectador_content = "<html><body><h2>El Espectador News</h2></body></html>"
-
-    requests_mocker.get("[https://www.eltiempo.com/](https://www.eltiempo.com/)", text=eltiempo_content, status_code=200)
-    requests_mocker.get("[https://www.elespectador.com/](https://www.elespectador.com/)", text=elespectador_content, status_code=200)
-
-    response = download_and_upload_to_s3({}, {})
-
-    assert response['statusCode'] == 200
-    assert 'Download and upload process completed.' in response['body']
-
-    today_str = datetime.date.today().strftime('%Y-%m-%d')
-
-    obj_el_tiempo = s3_client.get_object(Bucket=os.environ['S3_BUCKET'], Key=f'headlines/raw/el_tiempo-contenido-{today_str}.html')
-    assert obj_el_tiempo['Body'].read().decode('utf-8') == eltiempo_content
-
-    obj_el_espectador = s3_client.get_object(Bucket=os.environ['S3_BUCKET'], Key=f'headlines/raw/el_espectador-contenido-{today_str}.html')
-    assert obj_el_espectador['Body'].read().decode('utf-8') == elespectador_content
-
-    captured = capsys.readouterr()
-    assert "Successfully uploaded el_tiempo content." in captured.out
-    assert "Successfully uploaded el_espectador content." in captured.out
-
-@mock_aws
-@requests_mock.Mocker()
-def test_download_and_upload_to_s3_partial_failure(requests_mocker, capsys):
-    from src.lambda_functions.download_headlines import download_and_upload_to_s3
-
-    s3_client = boto3.client('s3', region_name='us-east-1')
-    s3_client.create_bucket(Bucket=os.environ['S3_BUCKET'])
-
-    # Mock one success, one failure
-    requests_mocker.get("[https://www.eltiempo.com/](https://www.eltiempo.com/)", status_code=500)
-    requests_mocker.get("[https://www.elespectador.com/](https://www.elespectador.com/)", text="<html><body><h2>El Espectador News</h2></body></html>", status_code=200)
-
-    response = download_and_upload_to_s3({}, {})
-
-    assert response['statusCode'] == 200 # Lambda returns 200 if it handles partial failures gracefully
-    assert 'Download and upload process completed.' in response['body']
-
-    captured = capsys.readouterr()
-    assert "Error downloading [https://www.eltiempo.com/](https://www.eltiempo.com/)" in captured.out
-    assert "Successfully uploaded el_espectador content." in captured.out
-
-    today_str = datetime.date.today().strftime('%Y-%m-%d')
-    with pytest.raises(s3_client.exceptions.NoSuchKey):
-        s3_client.get_object(Bucket=os.environ['S3_BUCKET'], Key=f'headlines/raw/el_tiempo-contenido-{today_str}.html')
-
-    obj_el_espectador = s3_client.get_object(Bucket=os.environ['S3_BUCKET'], Key=f'headlines/raw/el_espectador-contenido-{today_str}.html')
-    assert obj_el_espectador['Body'].read().decode('utf-8') == "<html><body><h2>El Espectador News</h2></body></html>"
+    if original_s3_bucket:
+        os.environ['S3_DATA_BUCKET'] = original_s3_bucket
+    else:
+        del os.environ['S3_DATA_BUCKET']

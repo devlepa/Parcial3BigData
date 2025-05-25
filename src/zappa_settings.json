@@ -1,43 +1,45 @@
 {
     "dev": {
-        "s3_bucket": "devlepa-zappa-deploy", // Bucket interno de Zappa para despliegues
-        "app_function": "src.lambda_functions.download_headlines.download_and_upload_to_s3", // Función principal para el despliegue web (si aplica)
-        "aws_region": "us-east-1", // O tu región
-        "memory_size": 512, // Ajusta según la necesidad
-        "timeout_seconds": 900, // Tiempo de espera para la Lambda (hasta 15 minutos, EMR puede tardar)
+        "s3_bucket": "DUMMY_S3_ZAPPA_DEPLOY_BUCKET",
+        "app_function": "src.lambda_functions.download_headlines.download_and_upload_to_s3",
+        "aws_region": "us-east-1",
+        "memory_size": 512,
+        "timeout_seconds": 900,
         "events": [
             {
                 "function": "src.lambda_functions.download_headlines.download_and_upload_to_s3",
-                "schedule": "cron(0 6 * * ? *)" // Todos los días a las 6 AM UTC
+                "schedule": "cron(0 6 * * ? *)"
             },
             {
                 "function": "src.lambda_functions.process_headlines.process_s3_html_event",
-                "bucket": "[TU_NOMBRE_DE_USUARIO]-noticias-data", // El bucket de datos
+                "bucket": "DUMMY_S3_DATA_BUCKET",
                 "event": "s3:ObjectCreated:*",
-                "prefix": "headlines/raw/", // Solo para objetos en esta carpeta
-                "suffix": ".html"          // Solo para archivos HTML
+                "prefix": "headlines/raw/",
+                "suffix": ".html"
             },
             {
                 "function": "src.lambda_functions.trigger_crawler.trigger_glue_crawler",
-                "schedule": "cron(30 6 * * ? *)" // Todos los días a las 6:30 AM UTC (después de procesar HTML)
+                "schedule": "cron(30 6 * * ? *)"
             },
             {
                 "function": "src.lambda_functions.emr_orchestrator_lambda.launch_emr_and_run_spark_job",
-                "schedule": "cron(0 8 * * ? *)" // Todos los días a las 8 AM UTC (después que Glue haya catalogado todo)
+                "schedule": "cron(0 8 * * ? *)"
             }
         ],
         "environment_variables": {
-            "S3_BUCKET": "[TU_NOMBRE_DE_USUARIO]-noticias-data",
-            "GLUE_CRAWLER_NAME": "headlines_csv_crawler",
-            "EMR_CLUSTER_NAME": "NewsMLCluster",
-            "EMR_RELEASE_LABEL": "emr-6.15.0",
-            "EMR_LOG_URI": "s3://[TU_NOMBRE_DE_USUARIO]-emr-logs/emr-logs/",
-            "EC2_SUBNET_ID": "[TU_SUBNET_ID]",
-            "EC2_KEY_PAIR": "[TU_EC2_KEY_PAIR_NAME]",
-            "EMR_SERVICE_ROLE": "EMR_DefaultRole",
-            "EC2_INSTANCE_PROFILE": "EMR_EC2_DefaultRole",
-            "S3_SCRIPT_LOCATION": "s3://[TU_NOMBRE_DE_USUARIO]-glue-scripts/scripts/run_ml_pipeline.py",
-            "BOOTSTRAP_ACTION_PATH": "s3://[TU_NOMBRE_DE_USUARIO]-glue-scripts/bootstrap/install_pyspark_deps.sh"
+            "S3_DATA_BUCKET": "DUMMY_S3_DATA_BUCKET",
+            "S3_GLUE_SCRIPTS_BUCKET": "DUMMY_S3_GLUE_SCRIPTS_BUCKET",
+            "S3_EMR_LOGS_BUCKET": "DUMMY_S3_EMR_LOGS_BUCKET",
+            "GLUE_CRAWLER_NAME": "DUMMY_GLUE_CRAWLER_NAME",
+            "GLUE_RDS_CONNECTION_NAME": "DUMMY_GLUE_RDS_CONNECTION_NAME",
+            "EMR_CLUSTER_NAME": "DUMMY_EMR_CLUSTER_NAME",
+            "EMR_RELEASE_LABEL": "DUMMY_EMR_RELEASE_LABEL",
+            "EC2_SUBNET_ID": "DUMMY_EC2_SUBNET_ID",
+            "EC2_KEY_PAIR": "DUMMY_EC2_KEY_PAIR",
+            "EMR_SERVICE_ROLE": "DUMMY_EMR_SERVICE_ROLE",
+            "EC2_INSTANCE_PROFILE": "DUMMY_EC2_INSTANCE_PROFILE",
+            "S3_SCRIPT_LOCATION": "DUMMY_S3_SCRIPT_LOCATION",
+            "BOOTSTRAP_ACTION_PATH": "DUMMY_BOOTSTRAP_ACTION_PATH"
         },
         "manage_roles": true
     }
