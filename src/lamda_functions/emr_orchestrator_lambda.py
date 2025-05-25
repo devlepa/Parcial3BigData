@@ -1,36 +1,41 @@
 import boto3
 import os
 import datetime
+import time
 
-# Initialize EMR client
 emr_client = boto3.client('emr')
 
-# --- Configuration ---
-# IMPORTANT: Adjust these parameters to match your setup and preferences
-EMR_CLUSTER_NAME = "NewsMLCluster"
-EMR_RELEASE_LABEL = "emr-6.15.0" # Choose a recent, stable EMR release with Spark
-EMR_LOG_URI = "s3://your-emr-logs-bucket/emr-logs/" # Dedicated S3 bucket for EMR logs
-EC2_SUBNET_ID = "subnet-xxxxxxxxxxxxxxxxx" # Your VPC Subnet ID where EMR should launch
-EC2_KEY_PAIR = "your-ec2-key-pair-name" # Your EC2 Key Pair name (for SSH access, optional)
-EMR_SERVICE_ROLE = "EMR_DefaultRole" # Your EMR Service Role
-EC2_INSTANCE_PROFILE = "EMR_EC2_DefaultRole" # Your EMR EC2 Instance Profile
-S3_SCRIPT_LOCATION = "s3://your-glue-scripts-bucket/scripts/run_ml_pipeline.py"
-S3_BUCKET_FOR_DATA = "your-unique-bucket-name-here" # Your data S3 bucket
+# --- Configuración (se recomienda usar variables de entorno) ---
+EMR_CLUSTER_NAME = os.environ.get('EMR_CLUSTER_NAME', 'NewsMLCluster')
+EMR_RELEASE_LABEL = os.environ.get('EMR_RELEASE_LABEL', 'emr-6.15.0') # Versión de EMR con Spark
+EMR_LOG_URI = os.environ.get('EMR_LOG_URI', 's3://your-emr-logs-bucket/emr-logs/')
+EC2_SUBNET_ID = os.environ.get('EC2_SUBNET_ID', 'subnet-xxxxxxxxxxxxxxxxx') # ID de tu subred
+EC2_KEY_PAIR = os.environ.get('EC2_KEY_PAIR', 'your-ec2-key-pair-name') # Tu par de llaves EC2 (opcional)
+EMR_SERVICE_ROLE = os.environ.get('EMR_SERVICE_ROLE', 'EMR_DefaultRole') # Rol de servicio de EMR
+EC2_INSTANCE_PROFILE = os.environ.get('EC2_INSTANCE_PROFILE', 'EMR_EC2_DefaultRole') # Perfil de instancia EC2 para EMR
+S3_SCRIPT_LOCATION = os.environ.get('S3_SCRIPT_LOCATION', 's3://your-glue-scripts-bucket/scripts/run_ml_pipeline.py') # Script PySpark
+S3_BUCKET_FOR_DATA = os.environ.get('S3_BUCKET', 'your-unique-bucket-name-here') # Bucket de datos principal
 
-# Instance types and counts
+# Tipos y número de instancias para el cluster EMR
 MASTER_INSTANCE_TYPE = "m5.xlarge"
 CORE_INSTANCE_TYPE = "m5.xlarge"
-NUM_CORE_INSTANCES = 2 # Adjust based on workload
+NUM_CORE_INSTANCES = 2 # Ajusta según tu carga de trabajo
 
-# Bootstrap action (if you need custom libraries like NLTK)
-BOOTSTRAP_ACTION_PATH = "s3://your-glue-scripts-bucket/bootstrap/install_pyspark_deps.sh"
+# Acción de Bootstrap (para instalar librerías como NLTK, etc.)
+BOOTSTRAP_ACTION_PATH = os.environ.get('BOOTSTRAP_ACTION_PATH', 's3://your-glue-scripts-bucket/bootstrap/install_pyspark_deps.sh')
+
 
 def launch_emr_and_run_spark_job(event, context):
-    print("Launching EMR cluster and running Spark job...")
+    """
+    Función Lambda para lanzar un cluster EMR, ejecutar un script PySpark y apagar el cluster.
+    """
+    print("Iniciando cluster EMR y ejecutando trabajo Spark...")
+    cluster_name = EMR_CLUSTER_NAME + "-" + datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+
     try:
-        # Define cluster configuration
+        # Configuración del cluster
         cluster_config = {
-            'Name': EMR_CLUSTER_NAME + "-" + datetime.datetime.now().strftime("%Y%m%d%H%M%S"),
+            'Name': cluster_name,
             'ReleaseLabel': EMR_RELEASE_LABEL,
             'Applications': [
                 {'Name': 'Spark'}
@@ -52,12 +57,12 @@ def launch_emr_and_run_spark_job(event, context):
                         'InstanceCount': NUM_CORE_INSTANCES,
                     }
                 ],
-                'Ec2KeyName': EC2_KEY_PAIR, # Optional
-                'KeepJobFlowAliveWhenNoSteps': False, # Important: cluster terminates after job
+                'Ec2KeyName': EC2_KEY_PAIR,
+                'KeepJobFlowAliveWhenNoSteps': False, # ¡IMPORTANTE! El cluster se termina después del trabajo
                 'TerminationProtected': False,
                 'Ec2SubnetId': EC2_SUBNET_ID,
-                # 'EmrManagedMasterSecurityGroup': 'sg-xxxxxxxxxxxxxxxxx', # Optional
-                # 'EmrManagedSlaveSecurityGroup': 'sg-xxxxxxxxxxxxxxxxx',  # Optional
+                # 'EmrManagedMasterSecurityGroup': 'sg-xxxxxxxxxxxxxxxxx', # Opcional: para control de red más granular
+                # 'EmrManagedSlaveSecurityGroup': 'sg-xxxxxxxxxxxxxxxxx',
             },
             'Configurations': [
                 {
@@ -72,21 +77,21 @@ def launch_emr_and_run_spark_job(event, context):
             'Steps': [
                 {
                     'Name': 'Run PySpark ML Pipeline',
-                    'ActionOnFailure': 'TERMINATE_CLUSTER', # Terminate if job fails
+                    'ActionOnFailure': 'TERMINATE_CLUSTER', # Terminar el cluster si el job falla
                     'HadoopJarStep': {
-                        'Jar': 'command-runner.jar', # Generic jar for running commands
+                        'Jar': 'command-runner.jar', # Jar genérico para ejecutar comandos
                         'Args': [
                             'spark-submit',
                             '--deploy-mode', 'cluster',
-                            '--conf', f'spark.pyspark.python={sys.executable}', # Use the Python from EMR
+                            '--conf', 'spark.pyspark.python=/usr/bin/python3', # Asegúrate de la ruta de Python en EMR
                             S3_SCRIPT_LOCATION,
-                            # Optionally pass arguments to your script here
+                            # Si tu script PySpark necesita argumentos, pásalos aquí:
                             # S3_BUCKET_FOR_DATA
                         ]
                     }
                 }
             ],
-            'BootstrapActions': [ # Optional: Include if you have a bootstrap script
+            'BootstrapActions': [
                 {
                     'Name': 'Install PySpark Dependencies',
                     'ScriptBootstrapAction': {
@@ -104,19 +109,21 @@ def launch_emr_and_run_spark_job(event, context):
             ]
         }
 
-        # Launch the EMR cluster
+        # Iniciar el cluster EMR
         response = emr_client.run_job_flow(**cluster_config)
         cluster_id = response['JobFlowId']
-        print(f"Started EMR cluster with ID: {cluster_id}")
+        print(f"Cluster EMR iniciado con ID: {cluster_id}")
+
+        # Opcional: Esperar a que el cluster se complete/falle para un feedback más rápido
+        # No es necesario para el funcionamiento normal de Lambda, ya que el paso se ejecuta en EMR
+        # emr_client.get_waiter('cluster_terminated_without_errors').wait(ClusterId=cluster_id)
+        # print(f"Cluster {cluster_id} terminado.")
 
         return {
             'statusCode': 200,
-            'body': f'Successfully launched EMR cluster {cluster_id} to run ML pipeline.'
+            'body': f'Lanzado exitosamente el cluster EMR {cluster_id} para ejecutar pipeline ML.'
         }
 
     except Exception as e:
-        print(f"Error launching EMR cluster: {e}")
-        return {
-            'statusCode': 500,
-            'body': f'Error launching EMR cluster: {e}'
-        }
+        print(f"Error al lanzar el cluster EMR: {e}")
+        raise e # Re-lanzar la excepción para que Lambda marque un error

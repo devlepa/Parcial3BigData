@@ -4,34 +4,29 @@ import os
 # Initialize Glue client
 glue = boto3.client('glue')
 
-# Get the crawler name from environment variables or hardcode (environment variable preferred for Zappa)
-GLUE_CRAWLER_NAME = os.environ.get('GLUE_CRAWLER_NAME', 'headlines_csv_crawler') # Use the name you gave your crawler
+# Get the crawler name from environment variables set in zappa_settings.json
+GLUE_CRAWLER_NAME = os.environ.get('GLUE_CRAWLER_NAME', 'headlines_csv_crawler')
 
 def trigger_glue_crawler(event, context):
     """
-    Lambda function to trigger an AWS Glue crawler.
-    This function can be invoked manually, via CloudWatch event, or by another Lambda.
-    For this partial, it's typically invoked on demand or after the CSV is generated (though
-    the requirement states "Cree un tercer lambda que ejecute un crawler", implying a direct trigger,
-    not necessarily tied to the S3 event).
+    Función Lambda para activar un crawler de AWS Glue.
+    Puede ser invocada manualmente o mediante un evento programado.
     """
-    print(f"Attempting to start Glue crawler: {GLUE_CRAWLER_NAME}")
+    print(f"Intentando iniciar el crawler de Glue: {GLUE_CRAWLER_NAME}")
     try:
         response = glue.start_crawler(Name=GLUE_CRAWLER_NAME)
-        print(f"Successfully started Glue crawler: {GLUE_CRAWLER_NAME}. Response: {response}")
+        print(f"Crawler de Glue iniciado exitosamente: {GLUE_CRAWLER_NAME}. Respuesta: {response}")
         return {
             'statusCode': 200,
-            'body': f'Successfully started Glue crawler: {GLUE_CRAWLER_NAME}'
+            'body': f'Crawler de Glue {GLUE_CRAWLER_NAME} iniciado exitosamente.'
         }
     except glue.exceptions.CrawlerRunningException:
-        print(f"Crawler {GLUE_CRAWLER_NAME} is already running. Skipping.")
+        print(f"El Crawler {GLUE_CRAWLER_NAME} ya está en ejecución. Saltando.")
         return {
             'statusCode': 200,
-            'body': f'Crawler {GLUE_CRAWLER_NAME} is already running.'
+            'body': f'El Crawler {GLUE_CRAWLER_NAME} ya está en ejecución.'
         }
     except Exception as e:
-        print(f"Error starting Glue crawler {GLUE_CRAWLER_NAME}: {e}")
-        return {
-            'statusCode': 500,
-            'body': f'Error starting Glue crawler {GLUE_CRAWLER_NAME}: {e}'
-        }
+        print(f"Error al iniciar el crawler de Glue {GLUE_CRAWLER_NAME}: {e}")
+        # Considera re-lanzar la excepción para que Lambda marque un error
+        raise e
