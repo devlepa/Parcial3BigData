@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 # Carga variables de entorno del archivo .env si existe (solo para desarrollo local)
 load_dotenv()
 
-s3 = boto3.client('s3')
+s3 = boto3.client('s3', region_name=os.environ.get('AWS_REGION', 'us-east-1'))
 
 # Obtiene el nombre del bucket S3 de las variables de entorno
 S3_BUCKET_NAME = os.environ.get('S3_DATA_BUCKET')
