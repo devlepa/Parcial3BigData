@@ -4,81 +4,74 @@ name: Deploy Zappa Lambdas to AWS
 on:
   push:
     branches:
-      - main # Or 'develop' for feature branches
+      - main # O 'develop' si tienes una rama de desarrollo
     paths:
-      - 'src/lambda_functions/**' # Trigger only if Lambda code changes
+      - 'src/lambda_functions/**' # Se dispara si el código de Lambda cambia
       - 'src/zappa_settings.json'
-      - 'src/requirements.txt'
+      - 'src/environment.yml' # O si tu archivo de Conda cambia
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      AWS_REGION: us-east-1 # Your AWS region
-      S3_DATA_BUCKET: your-unique-bucket-name-here # Your data bucket
-      GLUE_CRAWLER_NAME: headlines_csv_crawler # Your Glue crawler name
-      EMR_LOGS_BUCKET: your-emr-logs-bucket # For EMR orchestrator lambda
-      EC2_SUBNET_ID: subnet-xxxxxxxxxxxxxxxxx
-      EC2_KEY_PAIR: your-ec2-key-pair-name
+      AWS_REGION: us-east-1 # Tu región de AWS
+      S3_DATA_BUCKET: [TU_NOMBRE_DE_USUARIO]-noticias-data
+      GLUE_CRAWLER_NAME: headlines_csv_crawler
+      EMR_LOGS_BUCKET: [TU_NOMBRE_DE_USUARIO]-emr-logs
+      EC2_SUBNET_ID: [TU_SUBNET_ID]
+      EC2_KEY_PAIR: [TU_EC2_KEY_PAIR_NAME]
       EMR_SERVICE_ROLE: EMR_DefaultRole
       EC2_INSTANCE_PROFILE: EMR_EC2_DefaultRole
-      S3_SCRIPTS_BUCKET: your-glue-scripts-bucket # For EMR orchestrator lambda
-      BOOTSTRAP_ACTION_PATH: s3://your-glue-scripts-bucket/bootstrap/install_pyspark_deps.sh
+      S3_SCRIPTS_BUCKET: [TU_NOMBRE_DE_USUARIO]-glue-scripts
+      BOOTSTRAP_ACTION_PATH: s3://[TU_NOMBRE_DE_USUARIO]-glue-scripts/bootstrap/install_pyspark_deps.sh
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
+    - name: Set up Miniconda
+      uses: conda-incubator/setup-miniconda@v3
       with:
-        python-version: '3.9' # Match your Lambda runtime
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install zappa requests boto3 beautifulsoup4 # Install all Zappa and Lambda dependencies
-        pip install -r src/requirements.txt # If you have a requirements.txt
+        python-version: 3.9 # Debe coincidir con el python= en environment.yml
+        environment-file: src/environment.yml # Ruta a tu archivo environment.yml
+        activate-environment: parcial3_env # Nombre de tu entorno Conda
+        auto-activate-base: false # No activar el entorno base por defecto
 
     - name: Configure AWS Credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
-
-    - name: Configure Zappa Settings for CI/CD
-      # Dynamically update zappa_settings.json with environment variables
-      # This is crucial for secrets and dynamic values in CI/CD
-      run: |
-        sed -i 's/your-unique-bucket-name-here/${{ env.S3_DATA_BUCKET }}/g' src/zappa_settings.json
-        sed -i 's/your-zappa-deployment-bucket/${{ secrets.ZAPPA_DEPLOY_BUCKET }}/g' src/zappa_settings.json
-        sed -i 's/headlines_csv_crawler/${{ env.GLUE_CRAWLER_NAME }}/g' src/zappa_settings.json
-        sed -i 's|s3://your-emr-logs-bucket/emr-logs/|${{ env.EMR_LOGS_BUCKET }}/emr-logs/|g' src/zappa_settings.json # Handle S3 path
-        sed -i 's/subnet-xxxxxxxxxxxxxxxxx/${{ env.EC2_SUBNET_ID }}/g' src/zappa_settings.json
-        sed -i 's/your-ec2-key-pair-name/${{ env.EC2_KEY_PAIR }}/g' src/zappa_settings.json
-        sed -i 's/EMR_DefaultRole/${{ env.EMR_SERVICE_ROLE }}/g' src/zappa_settings.json
-        sed -i 's/EMR_EC2_DefaultRole/${{ env.EC2_INSTANCE_PROFILE }}/g' src/zappa_settings.json
-        sed -i 's|s3://your-glue-scripts-bucket/scripts/run_ml_pipeline.py|${{ env.S3_SCRIPTS_BUCKET }}/scripts/run_ml_pipeline.py|g' src/zappa_settings.json
+        aws-region: <span class="math-inline">\{\{ env\.AWS\_REGION \}\}
+\- name\: Configure Zappa Settings for CI/CD
+\# Reemplaza los placeholders en zappa\_settings\.json con los valores correctos
+run\: \|
+sed \-i 's\|\\\[TU\_NOMBRE\_DE\_USUARIO\\\]\-zappa\-deploy\|</span>{{ secrets.ZAPPA_DEPLOY_BUCKET }}|g' src/zappa_settings.json
+        sed -i 's|\[TU_NOMBRE_DE_USUARIO\]-noticias-data|<span class="math-inline">\{\{ env\.S3\_DATA\_BUCKET \}\}\|g' src/zappa\_settings\.json
+sed \-i 's\|headlines\_csv\_crawler\|</span>{{ env.GLUE_CRAWLER_NAME }}|g' src/zappa_settings.json
+        sed -i 's|s3://your-emr-logs-bucket/emr-logs/|<span class="math-inline">\{\{ env\.EMR\_LOGS\_BUCKET \}\}/emr\-logs/\|g' src/zappa\_settings\.json
+sed \-i 's\|\\\[TU\_SUBNET\_ID\\\]\|</span>{{ env.EC2_SUBNET_ID }}|g' src/zappa_settings.json
+        sed -i 's|\[TU_EC2_KEY_PAIR_NAME\]|<span class="math-inline">\{\{ env\.EC2\_KEY\_PAIR \}\}\|g' src/zappa\_settings\.json
+sed \-i 's\|EMR\_DefaultRole\|</span>{{ env.EMR_SERVICE_ROLE }}|g' src/zappa_settings.json
+        sed -i 's|EMR_EC2_DefaultRole|<span class="math-inline">\{\{ env\.EC2\_INSTANCE\_PROFILE \}\}\|g' src/zappa\_settings\.json
+sed \-i 's\|s3\://your\-glue\-scripts\-bucket/scripts/run\_ml\_pipeline\.py\|</span>{{ env.S3_SCRIPTS_BUCKET }}/scripts/run_ml_pipeline.py|g' src/zappa_settings.json
         sed -i 's|s3://your-glue-scripts-bucket/bootstrap/install_pyspark_deps.sh|${{ env.BOOTSTRAP_ACTION_PATH }}|g' src/zappa_settings.json
 
     - name: Run Unit Tests
       run: |
-        pip install pytest moto requests-mock # Install testing dependencies
         pytest tests/unit/lambda_functions/
 
     - name: Deploy Zappa Lambdas
       run: |
         cd src
-        zappa update dev --json # Use update for subsequent deployments
+        zappa update dev --json
       env:
-        # Pass environment variables needed by Zappa (e.g., S3_BUCKET from zappa_settings)
-        # Zappa reads these from zappa_settings.json directly but passing them again ensures consistency
+        # Se asegura de que las variables de entorno estén disponibles para Zappa
         S3_BUCKET: ${{ env.S3_DATA_BUCKET }}
         GLUE_CRAWLER_NAME: ${{ env.GLUE_CRAWLER_NAME }}
         EMR_CLUSTER_NAME: ${{ env.EMR_CLUSTER_NAME }}
         EMR_RELEASE_LABEL: ${{ env.EMR_RELEASE_LABEL }}
-        EMR_LOG_URI: ${{ env.EMR_LOGS_BUCKET }}/emr-logs/
+        EMR_LOG_URI: ${{ env.EMR_LOGS_BUCKET }}
         EC2_SUBNET_ID: ${{ env.EC2_SUBNET_ID }}
         EC2_KEY_PAIR: ${{ env.EC2_KEY_PAIR }}
         EMR_SERVICE_ROLE: ${{ env.EMR_SERVICE_ROLE }}
