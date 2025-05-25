@@ -5,7 +5,7 @@ import os
 import sys
 
 # Initialize S3 client
-s3 = boto3.client('s3')
+s3 = boto3.client('s3', region_name='us-east-1')
 
 # Get S3 bucket name from environment variable
 # IMPORTANT: This will be set by Zappa's environment_variables in zappa_settings.json
@@ -22,8 +22,6 @@ def download_and_upload_to_s3(event, context):
     newspapers = {
         'el_tiempo': '[https://www.eltiempo.com/](https://www.eltiempo.com/)',
         'el_espectador': '[https://www.elespectador.com/](https://www.elespectador.com/)',
-        # Add more newspapers here if needed
-        # 'publimetro': '[https://www.publimetro.co/](https://www.publimetro.co/)',
     }
 
     print(f"Starting download and upload for date: {date_str} to bucket: {S3_BUCKET_NAME}")

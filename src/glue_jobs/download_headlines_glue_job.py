@@ -3,11 +3,15 @@ import boto3
 import datetime
 import os
 import sys
+from dotenv import load_dotenv
+
+# Cargar variables de entorno desde el archivo .env
+load_dotenv()
 
 # Para los jobs de Glue, los argumentos se pasan via sys.argv o Glue's getResolvedOptions
 from awsglue.utils import getResolvedOptions
 
-s3 = boto3.client('s3')
+s3 = boto3.client('s3', os.environ.get('AWS_REGION', 'us-east-1')) # Asegúrate de que la región sea correcta
 
 # Obtener parámetros pasados al job de Glue
 # Asegúrate de que 'S3_BUCKET' se pase como un argumento de job en la configuración de Glue.
