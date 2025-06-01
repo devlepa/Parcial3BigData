@@ -1,13 +1,14 @@
 {
     "dev": {
         "s3_bucket": "DUMMY_S3_ZAPPA_DEPLOY_BUCKET",
-        "app_function": "src.lambda_functions.download_headlines.download_and_upload_to_s3",
+        "layers": ["arn:aws:lambda:us-east-1:1093126611678:layer:SeleniumChromiumLayer2:1"],
+        "app_function": "src.lambda_functions.download_headlines.download_and_upload_html_with_selenium",
         "aws_region": "us-east-1",
-        "memory_size": 512,
-        "timeout_seconds": 900,
+        "memory_size": 1536, 
+        "timeout_seconds": 300, 
         "events": [
             {
-                "function": "src.lambda_functions.download_headlines.download_and_upload_to_s3",
+                "function": "src.lambda_functions.download_headlines.download_and_upload_html_with_selenium",
                 "schedule": "cron(0 6 * * ? *)"
             },
             {
