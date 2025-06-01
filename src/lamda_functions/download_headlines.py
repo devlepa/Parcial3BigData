@@ -1,65 +1,93 @@
-import requests
-import boto3
-import datetime
+# src/lambda_functions/download_headlines.py
 import os
-from dotenv import load_dotenv
+import boto3
+import json
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from datetime import datetime
+import time # Importar time para el sleep
 
-# Carga variables de entorno del archivo .env si existe (solo para desarrollo local)
-load_dotenv()
+# AWS S3 client
+s3_client = boto3.client('s3')
 
-s3 = boto3.client('s3')
+def download_and_upload_html_with_selenium(event, context):
+    print("Starting download_and_upload_html_with_selenium Lambda function.")
 
-# Obtiene el nombre del bucket S3 de las variables de entorno
-S3_BUCKET_NAME = os.environ.get('S3_DATA_BUCKET')
+    s3_data_bucket = os.environ.get('S3_DATA_BUCKET')
+    if not s3_data_bucket:
+        print("ERROR: S3_DATA_BUCKET environment variable not set.")
+        return {
+            'statusCode': 500,
+            'body': 'S3_DATA_BUCKET environment variable not configured.'
+        }
 
-def download_and_upload_to_s3(event, context):
-    """
-    Descarga titulares de El Tiempo y El Espectador y los sube a S3.
-    """
-    if not S3_BUCKET_NAME:
-        print("Error: La variable de entorno 'S3_DATA_BUCKET' no está configurada.")
-        return {'statusCode': 500, 'body': 'S3_DATA_BUCKET environment variable not set.'}
+    # URL base para El Espectador Archivo.
+    # Para raspar múltiples páginas, tendrías que invocar esta Lambda varias veces
+    # o implementar una lógica de paginación más avanzada (ej. usando Step Functions).
+    # Por ahora, solo la primera página para simplificar y ajustarse a los límites de Lambda.
+    scrape_url = "https://www.elespectador.com/archivo/" # La primera página del archivo
 
-    print(f"Iniciando descarga y subida a S3. Bucket destino: {S3_BUCKET_NAME}")
+    # --- Selenium Setup for Lambda Layer ---
+    chrome_bin_path = "/opt/bin/chrome"
+    chromedriver_path = "/opt/bin/chromedriver"
 
-    current_date = datetime.datetime.now().strftime("%Y-%m-%d")
+    print(f"Chromium binary path: {chrome_bin_path}")
+    print(f"ChromeDriver path: {chromedriver_path}")
 
-    # URL y prefijos de archivos
-    news_sources = {
-        "eltiempo": "https://www.eltiempo.com/",
-        "elespectador": "https://www.elespectador.com/"
-    }
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--window-size=1280x800")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--single-process")
+    chrome_options.add_argument("--remote-debugging-port=9222") # Útil para depuración si fuera necesario
 
-    results = []
-    for source_name, url in news_sources.items():
-        try:
-            print(f"Descargando de {source_name} desde {url}")
-            response = requests.get(url, timeout=10)
-            response.raise_for_status() # Lanza un error para códigos de estado HTTP erróneos
+    service = Service(executable_path=chromedriver_path)
 
-            html_content = response.text
-            file_key = f"headlines/raw/{source_name}/{current_date}/{source_name}_{current_date}.html"
+    driver = None
+    try:
+        print("Initializing Chrome WebDriver...")
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        print(f"WebDriver initialized. Navigating to: {scrape_url}")
 
-            print(f"Subiendo {source_name} HTML a s3://{S3_BUCKET_NAME}/{file_key}")
-            s3.put_object(Bucket=S3_BUCKET_NAME, Key=file_key, Body=html_content)
-            results.append(f"Successfully uploaded {source_name} to {file_key}")
+        driver.get(scrape_url)
+        time.sleep(5) # Esperar a que la página cargue completamente los elementos dinámicos
+        print(f"Successfully navigated to {scrape_url}. Page title: {driver.title}")
 
-        except requests.exceptions.RequestException as e:
-            error_message = f"Error al descargar de {source_name}: {e}"
-            print(error_message)
-            results.append(error_message)
-        except Exception as e:
-            error_message = f"Error inesperado al procesar {source_name}: {e}"
-            print(error_message)
-            results.append(error_message)
+        html_content = driver.page_source
+        print(f"Successfully obtained HTML content. Length: {len(html_content)} bytes.")
 
-    return {
-        'statusCode': 200,
-        'body': f'Descarga y subida de titulares completada: {"; ".join(results)}'
-    }
+        # Generate a unique filename for S3
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        # El nombre del archivo puede incluir la página para identificarla mejor si raspas varias
+        file_name = f"elespectador_archive_page_1_{timestamp}.html"
+        s3_key = f"headlines/raw/{file_name}"
 
-# Para pruebas locales o si se ejecuta directamente
-if __name__ == "__main__":
-    # Asegúrate de tener el .env configurado con S3_DATA_BUCKET
-    response = download_and_upload_to_s3(None, None)
-    print(response)
+        s3_client.put_object(
+            Bucket=s3_data_bucket,
+            Key=s3_key,
+            Body=html_content,
+            ContentType='text/html'
+        )
+        print(f"Successfully uploaded HTML to s3://{s3_data_bucket}/{s3_key}")
+
+        return {
+            'statusCode': 200,
+            'body': json.dumps(f'HTML content from {scrape_url} saved to S3 at {s3_key}')
+        }
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            'statusCode': 500,
+            'body': json.dumps(f'Error scraping {scrape_url}: {str(e)}')
+        }
+    finally:
+        if driver:
+            print("Quitting WebDriver.")
+            driver.quit()
+        print("Lambda function execution finished.")

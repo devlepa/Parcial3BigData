@@ -1,35 +1,44 @@
-import boto3
+# src/lambda_functions/trigger_crawler.py
 import os
-from dotenv import load_dotenv
+import boto3
+import json
 
-# Carga variables de entorno del archivo .env si existe (solo para desarrollo local)
-load_dotenv()
-
-glue = boto3.client('glue')
-
-# Obtiene el nombre del Glue Crawler de las variables de entorno
-GLUE_CRAWLER_NAME = os.environ.get('GLUE_CRAWLER_NAME')
+glue_client = boto3.client('glue')
 
 def trigger_glue_crawler(event, context):
-    """
-    Inicia un AWS Glue Crawler.
-    """
-    if not GLUE_CRAWLER_NAME:
-        print("Error: La variable de entorno 'GLUE_CRAWLER_NAME' no está configurada.")
-        return {'statusCode': 500, 'body': 'GLUE_CRAWLER_NAME environment variable not set.'}
+    print("Starting trigger_glue_crawler Lambda function.")
 
-    print(f"Iniciando Glue Crawler: {GLUE_CRAWLER_NAME}")
+    crawler_name = os.environ.get('GLUE_CRAWLER_NAME')
+    if not crawler_name:
+        print("ERROR: GLUE_CRAWLER_NAME environment variable not set.")
+        return {
+            'statusCode': 500,
+            'body': 'GLUE_CRAWLER_NAME not configured.'
+        }
 
     try:
-        response = glue.start_crawler(Name=GLUE_CRAWLER_NAME)
-        print(f"Crawler {GLUE_CRAWLER_NAME} iniciado exitosamente. Respuesta: {response}")
-        return {'statusCode': 200, 'body': f'Crawler {GLUE_CRAWLER_NAME} iniciado exitosamente.'}
-    except Exception as e:
-        print(f"Error al iniciar el crawler {GLUE_CRAWLER_NAME}: {e}")
-        return {'statusCode': 500, 'body': f'Error al iniciar el crawler: {e}'}
+        crawler_status_response = glue_client.get_crawler(Name=crawler_name)
+        crawler_state = crawler_status_response['Crawler']['State']
+        print(f"Crawler '{crawler_name}' current state: {crawler_state}")
 
-# Para pruebas locales
-if __name__ == "__main__":
-    # Asegúrate de tener el .env configurado con GLUE_CRAWLER_NAME
-    response = trigger_glue_crawler(None, None)
-    print(response)
+        if crawler_state not in ['RUNNING', 'STOPPING']:
+            print(f"Attempting to start Glue Crawler: {crawler_name}")
+            response = glue_client.start_crawler(Name=crawler_name)
+            print(f"Successfully initiated Glue Crawler: {crawler_name}")
+            print(f"Response: {json.dumps(response)}")
+            return {
+                'statusCode': 200,
+                'body': f'Glue Crawler {crawler_name} started successfully.'
+            }
+        else:
+            print(f"Crawler '{crawler_name}' is already {crawler_state}. Skipping start.")
+            return {
+                'statusCode': 200,
+                'body': f'Glue Crawler {crawler_name} is already {crawler_state}.'
+            }
+
+    except Exception as e:
+        print(f"Error starting Glue Crawler {crawler_name}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise e
